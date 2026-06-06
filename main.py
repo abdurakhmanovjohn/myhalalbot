@@ -5,11 +5,10 @@ import logging
 import pytz
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.filters import Command, CommandStart
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from aiogram.filters import Command
 
 from prayer_api import fetch_prayer_times
 
@@ -18,16 +17,16 @@ load_dotenv()
 bot = Bot(token=os.getenv('BOT_TOKEN'))
 dp = Dispatcher()
 
-
 async def send_prayer_reminder(bot: Bot, user_id: int, prayer_name: str, is_exact: bool):
-    """The actual function that pushes the message to the user."""
     try:
         if is_exact:
             text = f"<b>It is time for {prayer_name}.</b>"
+            kb = [[InlineKeyboardButton(text="Mark as Prayed", callback_data=f"pray_{prayer_name}")]]
+            reply_markup = InlineKeyboardMarkup(inline_keyboard=kb)
+            await bot.send_message(chat_id=user_id, text=text, parse_mode="HTML", reply_markup=reply_markup)
         else:
             text = f"<b>{prayer_name} is approaching!</b>\nTake a moment to prepare and make Wudu."
-            
-        await bot.send_message(chat_id=user_id, text=text, parse_mode="HTML")
+            await bot.send_message(chat_id=user_id, text=text, parse_mode="HTML")
     except Exception as e:
         logging.error(f"Failed to send reminder to {user_id}: {e}")
 
@@ -86,10 +85,9 @@ async def daily_scheduler_job(db_pool: asyncpg.Pool, bot: Bot, scheduler: AsyncI
 
     print(f"\nSuccessfully queued {queued_count} upcoming reminders for today.")
 
-
 @dp.message(CommandStart())
 async def command_start_handler(message: Message) -> None:
-    kb = [[KeyboardButton(text="📍 Share Location", request_location=True)]]
+    kb = [[KeyboardButton(text="Share Location", request_location=True)]]
     keyboard = ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, one_time_keyboard=True)
     
     await message.answer(
@@ -107,7 +105,6 @@ async def check_schedule_handler(message: Message, scheduler: AsyncIOScheduler) 
     for job in scheduler.get_jobs():
         if user_id_str in job.id:
             time_str = job.next_run_time.strftime("%I:%M %p")
-            
             parts = job.id.split('_')
             prayer_name = parts[2]
             job_type = parts[3]
@@ -122,6 +119,40 @@ async def check_schedule_handler(message: Message, scheduler: AsyncIOScheduler) 
     else:
         schedule_text = "<b>Your Upcoming Alerts Today:</b>\n\n" + "\n".join(user_jobs)
         await message.answer(schedule_text, parse_mode="HTML")
+
+
+# @dp.message(Command("testbutton"))
+# async def test_button_handler(message: Message) -> None:
+#     kb = [[InlineKeyboardButton(text="Mark as Prayed", callback_data="pray_TestPrayer")]]
+#     reply_markup = InlineKeyboardMarkup(inline_keyboard=kb)
+#     await message.answer("Test reminder message.", reply_markup=reply_markup)
+
+@dp.message(Command("profile"))
+async def profile_handler(message: Message, db_pool: asyncpg.Pool) -> None:
+    user_id = message.from_user.id
+    
+    query = """
+        SELECT 
+            COUNT(*) AS total_prayers,
+            COUNT(*) FILTER (WHERE prayer_date = CURRENT_DATE) AS today_prayers
+        FROM prayer_logs 
+        WHERE user_id = $1 AND is_completed = TRUE;
+    """
+    
+    async with db_pool.acquire() as connection:
+        row = await connection.fetchrow(query, user_id)
+        
+    total = row['total_prayers'] if row['total_prayers'] else 0
+    today = row['today_prayers'] if row['today_prayers'] else 0
+    
+    text = (
+        f"<b>Profile: {message.from_user.full_name}</b>\n\n"
+        f"<b>Prayers Logged Today:</b> {today}/5\n"
+        f"<b>Lifetime Prayers Logged:</b> {total}\n\n"
+        "Keep up the good work!"
+    )
+    
+    await message.answer(text, parse_mode="HTML")
 
 @dp.message(F.location)
 async def location_handler(message: Message, db_pool: asyncpg.Pool, scheduler: AsyncIOScheduler) -> None:
@@ -164,17 +195,45 @@ async def location_handler(message: Message, db_pool: asyncpg.Pool, scheduler: A
         f"<b>Location registered successfully!</b>\n"
         f"<b>Timezone:</b> {user_timezone}\n\n"
         f"<b>Today's Timings:</b>\n"
-        f"• Fajr: {t['Fajr']}\n"
-        f"• Dhuhr: {t['Dhuhr']}\n"
-        f"• Asr: {t['Asr']}\n"
-        f"• Maghrib: {t['Maghrib']}\n"
-        f"• Isha: {t['Isha']}\n\n"
+        f"Fajr: {t['Fajr']}\n"
+        f"Dhuhr: {t['Dhuhr']}\n"
+        f"Asr: {t['Asr']}\n"
+        f"Maghrib: {t['Maghrib']}\n"
+        f"Isha: {t['Isha']}\n\n"
         "I have automatically set up your prayer alerts!"
     )
     
     await processing_msg.delete()
     await message.answer(success_text, parse_mode="HTML")
 
+@dp.callback_query(F.data.startswith("pray_"))
+async def log_prayer_handler(callback: CallbackQuery, db_pool: asyncpg.Pool) -> None:
+    prayer_name = callback.data.split("_")[1]
+    user_id = callback.from_user.id
+    current_date = datetime.now().date()
+
+    query = """
+        INSERT INTO prayer_logs (user_id, prayer_name, prayer_date, is_completed)
+        VALUES ($1, $2, $3, TRUE)
+        ON CONFLICT (user_id, prayer_name, prayer_date)
+        DO UPDATE SET is_completed = TRUE;
+    """
+
+    async with db_pool.acquire() as connection:
+        await connection.execute(query, user_id, prayer_name, current_date)
+
+    await callback.message.edit_text(
+        f"<b>{prayer_name} has been logged as completed.</b>",
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+# @dp.message(Command("testalert"))
+# async def test_alert_handler(message: Message) -> None:
+#     text = "<b>It is time for Asr.</b>"
+#     kb = [[InlineKeyboardButton(text="Mark as Prayed", callback_data="pray_Asr")]]
+#     reply_markup = InlineKeyboardMarkup(inline_keyboard=kb)
+#     await message.answer(text, parse_mode="HTML", reply_markup=reply_markup)
 
 async def main() -> None:
     pool = await asyncpg.create_pool(

@@ -2,14 +2,12 @@ import aiohttp
 import logging
 
 async def fetch_prayer_times(lat: float, lon: float) -> dict | None:
-    """
-    Fetches the 5 daily prayer times AND timezone from the Aladhan API using coordinates.
-    """
     url = "http://api.aladhan.com/v1/timings"
     params = {
         "latitude": lat,
         "longitude": lon,
-        "method": 2
+        "method": 2,
+        "school": 1
     }
 
     try:
@@ -34,6 +32,7 @@ async def fetch_prayer_times(lat: float, lon: float) -> dict | None:
                 else:
                     logging.error(f"Aladhan API returned status {response.status}")
                     return None
+                
     except Exception as e:
         logging.error(f"Error fetching prayer times: {e}")
         return None
