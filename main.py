@@ -206,11 +206,65 @@ async def location_handler(message: Message, db_pool: asyncpg.Pool, scheduler: A
     await processing_msg.delete()
     await message.answer(success_text, parse_mode="HTML")
 
+from datetime import date
+
+def generate_log_keyboard(target_date: date) -> InlineKeyboardMarkup:
+    date_str = target_date.strftime("%Y-%m-%d")
+    prev_date = (target_date - timedelta(days=1)).strftime("%Y-%m-%d")
+    next_date = (target_date + timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    kb = [
+        [
+            InlineKeyboardButton(text="Fajr", callback_data=f"pray_Fajr_{date_str}"), 
+            InlineKeyboardButton(text="Dhuhr", callback_data=f"pray_Dhuhr_{date_str}")
+        ],
+        [
+            InlineKeyboardButton(text="Asr", callback_data=f"pray_Asr_{date_str}"), 
+            InlineKeyboardButton(text="Maghrib", callback_data=f"pray_Maghrib_{date_str}")
+        ],
+        [
+            InlineKeyboardButton(text="Isha", callback_data=f"pray_Isha_{date_str}")
+        ],
+        [
+            InlineKeyboardButton(text="< Prev", callback_data=f"nav_log_{prev_date}"),
+            InlineKeyboardButton(text=date_str, callback_data="ignore"),
+            InlineKeyboardButton(text="Next >", callback_data=f"nav_log_{next_date}")
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+@dp.message(Command("log"))
+async def log_manual_handler(message: Message) -> None:
+    today = datetime.now().date()
+    
+    await message.answer(
+        f"<b>Manual Logging for {today}</b>\nSelect a prayer to mark as completed:",
+        reply_markup=generate_log_keyboard(today),
+        parse_mode="HTML"
+    )
+
+@dp.callback_query(F.data.startswith("nav_log_"))
+async def log_nav_handler(callback: CallbackQuery) -> None:
+    date_str = callback.data.split("_")[2]
+    target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    
+    await callback.message.edit_text(
+        f"<b>Manual Logging for {target_date}</b>\nSelect a prayer to mark as completed:",
+        reply_markup=generate_log_keyboard(target_date),
+        parse_mode="HTML"
+    )
+
 @dp.callback_query(F.data.startswith("pray_"))
 async def log_prayer_handler(callback: CallbackQuery, db_pool: asyncpg.Pool) -> None:
-    prayer_name = callback.data.split("_")[1]
+    parts = callback.data.split("_")
+    prayer_name = parts[1]
+    
+    if len(parts) == 3:
+        target_date = datetime.strptime(parts[2], "%Y-%m-%d").date()
+    else:
+        target_date = datetime.now().date()
+        
     user_id = callback.from_user.id
-    current_date = datetime.now().date()
 
     query = """
         INSERT INTO prayer_logs (user_id, prayer_name, prayer_date, is_completed)
@@ -220,13 +274,10 @@ async def log_prayer_handler(callback: CallbackQuery, db_pool: asyncpg.Pool) -> 
     """
 
     async with db_pool.acquire() as connection:
-        await connection.execute(query, user_id, prayer_name, current_date)
+        await connection.execute(query, user_id, prayer_name, target_date)
 
-    await callback.message.edit_text(
-        f"<b>{prayer_name} has been logged as completed.</b>",
-        parse_mode="HTML"
-    )
-    await callback.answer()
+    await callback.answer(f"{prayer_name} logged for {target_date}")
+
 
 # @dp.message(Command("testalert"))
 # async def test_alert_handler(message: Message) -> None:
