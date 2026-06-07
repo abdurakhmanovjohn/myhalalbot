@@ -14,7 +14,6 @@ async def create_tables():
         host=os.getenv('DB_HOST'),
         port=os.getenv('DB_PORT')
     )
-
     try:
         print("Creating 'users' table...")
         await conn.execute('''
@@ -23,6 +22,8 @@ async def create_tables():
                 username VARCHAR(255),
                 full_name VARCHAR(255),
                 timezone VARCHAR(50) DEFAULT 'UTC',
+                latitude DOUBLE PRECISION,
+                longitude DOUBLE PRECISION,
                 reminder_offset_mins INTEGER DEFAULT 5
             );
         ''')
@@ -32,18 +33,13 @@ async def create_tables():
             CREATE TABLE IF NOT EXISTS prayer_logs (
                 log_id SERIAL PRIMARY KEY,
                 user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
-                log_date DATE NOT NULL,
-                fajr BOOLEAN DEFAULT FALSE,
-                dhuhr BOOLEAN DEFAULT FALSE,
-                asr BOOLEAN DEFAULT FALSE,
-                maghrib BOOLEAN DEFAULT FALSE,
-                isha BOOLEAN DEFAULT FALSE,
-                UNIQUE(user_id, log_date)
+                prayer_name VARCHAR(20) NOT NULL,
+                prayer_date DATE NOT NULL,
+                is_completed BOOLEAN DEFAULT FALSE,
+                UNIQUE(user_id, prayer_name, prayer_date)
             );
         ''')
-        
         print("All tables created successfully!")
-
     except Exception as e:
         print(f"An error occurred: {e}")
     finally:
