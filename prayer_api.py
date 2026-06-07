@@ -1,13 +1,13 @@
 import aiohttp
 import logging
 
-async def fetch_prayer_times(lat: float, lon: float) -> dict | None:
-    url = "http://api.aladhan.com/v1/timings"
+async def fetch_prayer_times(lat: float, lon: float, method: int = 2, school: int = 1) -> dict | None:
+    url = "https://api.aladhan.com/v1/timings"
     params = {
         "latitude": lat,
         "longitude": lon,
-        "method": 2,
-        "school": 1
+        "method": method,
+        "school": school,
     }
 
     try:
@@ -18,7 +18,7 @@ async def fetch_prayer_times(lat: float, lon: float) -> dict | None:
                     data = json_data['data']
                     timings = data['timings']
                     timezone = data['meta']['timezone']
-                    
+
                     return {
                         "timezone": timezone,
                         "timings": {
@@ -26,7 +26,7 @@ async def fetch_prayer_times(lat: float, lon: float) -> dict | None:
                             "Dhuhr": timings["Dhuhr"],
                             "Asr": timings["Asr"],
                             "Maghrib": timings["Maghrib"],
-                            "Isha": timings["Isha"]
+                            "Isha": timings["Isha"],
                         }
                     }
                 else:

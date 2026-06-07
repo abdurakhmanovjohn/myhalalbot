@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
 async def create_tables():
     print("Connecting to database...")
     conn = await asyncpg.connect(
@@ -24,7 +25,8 @@ async def create_tables():
                 timezone VARCHAR(50) DEFAULT 'UTC',
                 latitude DOUBLE PRECISION,
                 longitude DOUBLE PRECISION,
-                reminder_offset_mins INTEGER DEFAULT 5
+                reminder_offset_mins INTEGER DEFAULT 5,
+                asr_school INTEGER DEFAULT 1
             );
         ''')
 
@@ -39,12 +41,18 @@ async def create_tables():
                 UNIQUE(user_id, prayer_name, prayer_date)
             );
         ''')
+
+        await conn.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS asr_school INTEGER DEFAULT 1;"
+        )
+
         print("All tables created successfully!")
     except Exception as e:
         print(f"An error occurred: {e}")
     finally:
         await conn.close()
         print("Database connection closed.")
+
 
 if __name__ == "__main__":
     asyncio.run(create_tables())
