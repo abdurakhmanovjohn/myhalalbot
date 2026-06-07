@@ -18,6 +18,13 @@ load_dotenv()
 bot = Bot(token=os.getenv('BOT_TOKEN'))
 dp = Dispatcher()
 
+def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
+    kb = [
+        [KeyboardButton(text="Profile"), KeyboardButton(text="Log Prayers")],
+        [KeyboardButton(text="View Schedule")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
 async def send_prayer_reminder(bot: Bot, user_id: int, prayer_name: str, is_exact: bool):
     try:
         if is_exact:
@@ -99,6 +106,7 @@ async def command_start_handler(message: Message) -> None:
     )
 
 @dp.message(Command("schedule"))
+@dp.message(F.text == "View Schedule")
 async def check_schedule_handler(message: Message, scheduler: AsyncIOScheduler) -> None:
     user_id_str = str(message.from_user.id)
     user_jobs = []
@@ -129,6 +137,7 @@ async def check_schedule_handler(message: Message, scheduler: AsyncIOScheduler) 
 #     await message.answer("Test reminder message.", reply_markup=reply_markup)
 
 @dp.message(Command("profile"))
+@dp.message(F.text == "Profile")
 async def profile_handler(message: Message, db_pool: asyncpg.Pool) -> None:
     user_id = message.from_user.id
     
@@ -205,7 +214,7 @@ async def location_handler(message: Message, db_pool: asyncpg.Pool, scheduler: A
     )
     
     await processing_msg.delete()
-    await message.answer(success_text, parse_mode="HTML")
+    await message.answer(success_text, parse_mode="HTML", reply_markup=get_main_menu_keyboard())
 
 def generate_log_keyboard(target_date: date) -> InlineKeyboardMarkup:
     date_str = target_date.strftime("%Y-%m-%d")
@@ -233,6 +242,7 @@ def generate_log_keyboard(target_date: date) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 @dp.message(Command("log"))
+@dp.message(F.text == "Log Prayers")
 async def log_manual_handler(message: Message) -> None:
     today = datetime.now().date()
     
