@@ -9,6 +9,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from datetime import date
 
 from prayer_api import fetch_prayer_times
 
@@ -91,7 +92,7 @@ async def command_start_handler(message: Message) -> None:
     keyboard = ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, one_time_keyboard=True)
     
     await message.answer(
-        f"As-salamu alaykum, {message.from_user.full_name}!\n\n"
+        f"Assalamu alaykum, {message.from_user.full_name}!\n\n"
         "To track your prayers and send accurate daily reminders, I need to know your local timezone.\n"
         "Please press the button below to share your location.",
         reply_markup=keyboard
@@ -206,8 +207,6 @@ async def location_handler(message: Message, db_pool: asyncpg.Pool, scheduler: A
     await processing_msg.delete()
     await message.answer(success_text, parse_mode="HTML")
 
-from datetime import date
-
 def generate_log_keyboard(target_date: date) -> InlineKeyboardMarkup:
     date_str = target_date.strftime("%Y-%m-%d")
     prev_date = (target_date - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -255,16 +254,38 @@ async def log_nav_handler(callback: CallbackQuery) -> None:
     )
 
 @dp.callback_query(F.data.startswith("pray_"))
-async def log_prayer_handler(callback: CallbackQuery, db_pool: asyncpg.Pool) -> None:
+async def log_prayer_handler(callback: CallbackQuery, db_pool: asyncpg.Pool, scheduler: AsyncIOScheduler) -> None:
     parts = callback.data.split("_")
     prayer_name = parts[1]
+    user_id = callback.from_user.id
+    
+    async with db_pool.acquire() as connection:
+        user_tz_str = await connection.fetchval("SELECT timezone FROM users WHERE user_id = $1", user_id)
+        
+    if not user_tz_str:
+        await callback.answer("Please set your location first using /start", show_alert=True)
+        return
+        
+    user_tz = pytz.timezone(user_tz_str)
+    user_now = datetime.now(user_tz)
     
     if len(parts) == 3:
         target_date = datetime.strptime(parts[2], "%Y-%m-%d").date()
     else:
-        target_date = datetime.now().date()
+        target_date = user_now.date()
         
-    user_id = callback.from_user.id
+    if target_date > user_now.date():
+        await callback.answer("You cannot log prayers for future dates.", show_alert=True)
+        return
+        
+    if target_date == user_now.date():
+        job_id = f"reminder_{user_id}_{prayer_name}_exact"
+        job = scheduler.get_job(job_id)
+        
+        if job:
+            time_str = job.next_run_time.strftime("%I:%M %p")
+            await callback.answer(f"It is not time for {prayer_name} yet. Adhan is at {time_str}.", show_alert=True)
+            return
 
     query = """
         INSERT INTO prayer_logs (user_id, prayer_name, prayer_date, is_completed)
