@@ -38,8 +38,14 @@ def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text="Profile"), KeyboardButton(text="Log Prayers")],
         [KeyboardButton(text="Reports"), KeyboardButton(text="30-Day Overview")],
         [KeyboardButton(text="View Schedule"), KeyboardButton(text="Settings")],
+        [KeyboardButton(text="Change Location")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+
+def share_location_keyboard() -> ReplyKeyboardMarkup:
+    kb = [[KeyboardButton(text="Share Location", request_location=True)]]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, one_time_keyboard=True)
 
 
 def report_selector() -> InlineKeyboardMarkup:
@@ -51,7 +57,6 @@ def report_selector() -> InlineKeyboardMarkup:
 
 
 def generate_log_keyboard(target_date: date, completed: set[str]) -> InlineKeyboardMarkup:
-    """Log keyboard with ✅ on completed prayers, plus Today / Calendar nav."""
     date_str = target_date.strftime("%Y-%m-%d")
     prev_date = (target_date - timedelta(days=1)).strftime("%Y-%m-%d")
     next_date = (target_date + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -77,7 +82,6 @@ def generate_log_keyboard(target_date: date, completed: set[str]) -> InlineKeybo
 
 
 def generate_calendar(year: int, month: int, user_today: date) -> InlineKeyboardMarkup:
-    """Month picker. Past/today are tappable; future days are inert."""
     prev_y, prev_m = (year - 1, 12) if month == 1 else (year, month - 1)
     next_y, next_m = (year + 1, 1) if month == 12 else (year, month + 1)
     header = f"{calendar.month_name[month]} {year}"
@@ -123,7 +127,7 @@ def settings_keyboard(offset: int, asr_school: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🕌 Asr calculation", callback_data="ignore")],
         [
             InlineKeyboardButton(text=asr_label(1, "Hanafi"), callback_data="set_asr_1"),
-            InlineKeyboardButton(text=asr_label(0, "Standard (Shafi'i)"), callback_data="set_asr_0"),
+            InlineKeyboardButton(text=asr_label(0, "Shafi'i"), callback_data="set_asr_0"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -161,7 +165,6 @@ async def get_completed_prayers(db_pool: asyncpg.Pool, user_id: int, target_date
 
 
 async def get_completion_map(db_pool: asyncpg.Pool, user_id: int, start_date: date) -> dict:
-    """date -> number of distinct prayers completed, for dates >= start_date."""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT prayer_date, COUNT(DISTINCT prayer_name) AS cnt FROM prayer_logs "
@@ -280,6 +283,7 @@ async def build_overview(db_pool: asyncpg.Pool, user_id: int, tz_str: str | None
         f"🔥 <b>Current streak:</b> {current_streak} {'day' if current_streak == 1 else 'days'}"
     )
 
+
 async def send_prayer_reminder(bot: Bot, user_id: int, prayer_name: str, is_exact: bool):
     try:
         if is_exact:
@@ -360,15 +364,24 @@ async def daily_scheduler_job(db_pool: asyncpg.Pool, bot: Bot, scheduler: AsyncI
 
     logging.info(f"Successfully queued {queued} upcoming jobs for today.")
 
+
 @dp.message(CommandStart())
 async def command_start_handler(message: Message) -> None:
-    kb = [[KeyboardButton(text="Share Location", request_location=True)]]
-    keyboard = ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, one_time_keyboard=True)
     await message.answer(
         f"Assalamu alaykum, {message.from_user.full_name}!\n\n"
         "To track your prayers and send accurate daily reminders, I need to know your local timezone.\n"
         "Please press the button below to share your location.",
-        reply_markup=keyboard
+        reply_markup=share_location_keyboard()
+    )
+
+
+@dp.message(Command("location"))
+@dp.message(F.text == "Change Location")
+async def change_location_handler(message: Message) -> None:
+    await message.answer(
+        "Send your new location to update your timezone and prayer times. "
+        "Your settings and logged prayers are kept.",
+        reply_markup=share_location_keyboard()
     )
 
 
@@ -382,7 +395,8 @@ async def help_handler(message: Message) -> None:
         "Reports — today / 7-day / 30-day summaries\n"
         "30-Day Overview — your activity grid\n"
         "View Schedule — today's upcoming alerts\n"
-        "Settings — reminder lead time and Asr calculation\n\n"
+        "Settings — reminder lead time and Asr calculation\n"
+        "Change Location — update your timezone and prayer times\n\n"
         "I send a heads-up before each prayer, an alert at the exact time, "
         "and an end-of-day summary."
     )
@@ -457,11 +471,14 @@ async def location_handler(message: Message, db_pool: asyncpg.Pool, scheduler: A
     lat, lon = message.location.latitude, message.location.longitude
     user_id = message.from_user.id
 
+    existing = await get_user_settings(db_pool, user_id)
+    school = existing['asr_school'] if existing else 1
+
     processing_msg = await message.answer(
         "Calculating your timezone and prayer schedules...",
         reply_markup=ReplyKeyboardRemove()
     )
-    prayer_data = await fetch_prayer_times(lat, lon)
+    prayer_data = await fetch_prayer_times(lat, lon, school=school)
     if not prayer_data:
         await processing_msg.delete()
         await message.answer("Failed to calculate your timezone. Please try sharing your location again later.")
@@ -535,6 +552,7 @@ async def settings_handler(message: Message, db_pool: asyncpg.Pool) -> None:
         "<b>⚙️ Settings</b>\nChoose how early you want reminders and your Asr method.",
         reply_markup=settings_keyboard(s['reminder_offset_mins'], s['asr_school']),
     )
+
 
 @dp.callback_query(F.data == "ignore")
 async def ignore_callback(callback: CallbackQuery) -> None:
@@ -704,6 +722,7 @@ async def log_prayer_handler(callback: CallbackQuery, db_pool: asyncpg.Pool, sch
         await callback.message.edit_reply_markup(reply_markup=done_kb)
         await callback.answer(f"{prayer_name} logged ✅")
 
+
 @dp.message()
 async def fallback_handler(message: Message) -> None:
     await message.answer(
@@ -721,6 +740,7 @@ async def set_bot_commands(bot: Bot) -> None:
         BotCommand(command="overview", description="30-day activity grid"),
         BotCommand(command="schedule", description="Today's upcoming alerts"),
         BotCommand(command="settings", description="Reminder time & Asr method"),
+        BotCommand(command="location", description="Update your location"),
         BotCommand(command="help", description="How the bot works"),
     ])
 
