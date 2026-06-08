@@ -28,7 +28,7 @@ bot = Bot(token=os.getenv('BOT_TOKEN'), default=DefaultBotProperties(parse_mode=
 dp = Dispatcher()
 
 PRAYERS = ('Fajr', 'Dhuhr', 'Asr', 'Maghrib', 'Isha')
-OFFSET_OPTIONS = (15, 5, 10, 20, 30)
+OFFSET_OPTIONS = (5, 10, 15, 20, 30)
 SUMMARY_HOUR = 21
 calendar.setfirstweekday(calendar.MONDAY)
 
