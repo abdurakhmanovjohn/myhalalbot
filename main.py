@@ -261,13 +261,13 @@ async def build_range_report(db_pool, user_id, start_date, end_date, title) -> s
 
 
 def _square(count: int) -> str:
-    if count >= 5:
-        return "🟩"
-    if count >= 3:
-        return "🟨"
-    if count >= 1:
-        return "🟥"
-    return "⬜"
+    return {
+        5: "🟩",
+        4: "🟨",
+        3: "🟧",
+        2: "🟥",
+        1: "🟫",
+    }.get(count, "⬜")
 
 
 async def build_overview(db_pool: asyncpg.Pool, user_id: int, tz_str: str | None) -> str:
@@ -306,7 +306,7 @@ async def build_overview(db_pool: asyncpg.Pool, user_id: int, tz_str: str | None
 
     return (
         f"<b>📊 Last 30 Days</b>\n\n{grid}\n\n"
-        "🟩 all 5  🟨 3-4  🟥 1-2  ⬜ none  ⬛ outside\n\n"
+        "🟩 5  🟨 4  🟧 3  🟥 2  🟫 1  ⬜ 0  ⬛ outside\n\n"
         f"<b>Perfect days:</b> {perfect}/{tracked_days}\n"
         f"<b>Completion:</b> {rate}%\n"
         f"🔥 <b>Current streak:</b> {current_streak} {'day' if current_streak == 1 else 'days'}"
