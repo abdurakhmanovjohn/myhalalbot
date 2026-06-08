@@ -4,14 +4,14 @@ A Telegram bot that delivers accurate, location-based prayer times and helps you
 
 ## Features
 
-- **Location-based prayer times** — uses the [Aladhan API](https://aladhan.com/prayer-times-api) to compute timings from your shared location and resolves your timezone automatically.
+- **Location-based prayer times** — uses the [Aladhan API](https://aladhan.com/prayer-times-api) to compute timings from your shared location and resolves your timezone automatically. Today's timings include sunrise (the end of Fajr time).
 - **Two-stage reminders** — a configurable heads-up before each prayer (so you can make Wudu) and an alert at the exact adhan time with a one-tap _Mark as Prayed_ button.
 - **End-of-day summary** — an automatic recap at 21:00 your local time, with a weekly recap on Sundays and a monthly recap on the last day of the month.
 - **Manual logging** — toggle any of the five daily prayers on or off. Navigate day by day, jump back to _Today_, or open a month **calendar** to pick any past date. Future dates are locked.
 - **Streaks** — current and longest streak of fully-completed days, shown in your profile. An unfinished today never breaks your streak.
-- **Reports** — on-demand daily, 7-day, and 30-day summaries with completion rate, perfect-day count, a per-prayer breakdown, and your most-missed prayer.
-- **30-day overview** — a GitHub-style activity grid colouring each day by how many prayers you completed.
-- **Settings** — change your reminder lead time (5–30 min) and your Asr calculation method (Hanafi or Standard/Shafi'i); changes apply immediately.
+- **Reports** — on-demand daily, 7-day, and 30-day summaries with completion rate, perfect-day count, a per-prayer breakdown, and your most-missed prayer(s). Stats are scaled to how long you've actually been tracking, so new users aren't penalised for days before they joined, and ties for the most-missed prayer are all listed.
+- **30-day overview** — a GitHub-style activity grid colouring each day by how many prayers you completed. Days before you started show as outside the tracked range rather than as misses.
+- **Settings** — change your reminder lead time (5–30 min, default 15) and your Asr calculation method (Hanafi or Standard/Shafi'i); changes apply immediately.
 - **Change location** — update your timezone and prayer times at any time without losing your settings or logs.
 
 ## Tech stack
@@ -38,15 +38,15 @@ halal_bot/
 
 **users**
 
-| Column               | Type    | Notes                           |
-| -------------------- | ------- | ------------------------------- |
-| user_id              | BIGINT  | Telegram user id (primary key)  |
-| username             | VARCHAR |                                 |
-| full_name            | VARCHAR |                                 |
-| timezone             | VARCHAR | Resolved from location          |
-| latitude / longitude | DOUBLE  | Used to recompute daily timings |
-| reminder_offset_mins | INTEGER | Heads-up lead time, default 5   |
-| asr_school           | INTEGER | 1 = Hanafi, 0 = Shafi'i         |
+| Column               | Type    | Notes                            |
+| -------------------- | ------- | -------------------------------- |
+| user_id              | BIGINT  | Telegram user id (primary key)   |
+| username             | VARCHAR |                                  |
+| full_name            | VARCHAR |                                  |
+| timezone             | VARCHAR | Resolved from location           |
+| latitude / longitude | DOUBLE  | Used to recompute daily timings  |
+| reminder_offset_mins | INTEGER | Heads-up lead time, default 15   |
+| asr_school           | INTEGER | 1 = Hanafi, 0 = Standard/Shafi'i |
 
 **prayer_logs** (one row per prayer per day)
 
@@ -64,8 +64,8 @@ halal_bot/
 1. **Clone and enter the project**
 
    ```bash
-   git clone <your-repo-url>
-   cd halal_bot
+   git clone https://github.com/abdurakhmanovjohn/myhalalbot.git
+   cd myhalalbot
    ```
 
 2. **Create a virtual environment and install dependencies**
@@ -120,6 +120,7 @@ halal_bot/
 
 ## Notes
 
+- **Time format.** Times are displayed in 24-hour format throughout, controlled by a single `TIME_FMT` constant in `main.py` (set it to `"%I:%M %p"` for 12-hour AM/PM).
 - **Calculation method.** Timings use the Aladhan ISNA method (`method=2`) by default, with the Asr school selectable per user (Hanafi by default). The method itself isn't yet user-configurable; it can be exposed in Settings if needed, since the method dramatically affects Fajr and Isha times across regions.
 - **Scheduling persistence.** Reminders and summaries are held in APScheduler's in-memory store. They are re-queued automatically at 00:01 local each day and again on startup, so the bot should run as a long-lived process for reminders to fire reliably.
 - **Security.** Keep `.env` out of version control (it's listed in `.gitignore`). If a bot token is ever exposed, revoke and reissue it via @BotFather.
