@@ -26,8 +26,7 @@ async def create_tables():
                 latitude DOUBLE PRECISION,
                 longitude DOUBLE PRECISION,
                 reminder_offset_mins INTEGER DEFAULT 15,
-                asr_school INTEGER DEFAULT 1,
-                calc_method INTEGER DEFAULT 14
+                asr_school INTEGER DEFAULT 1
             );
         ''')
 
@@ -45,9 +44,6 @@ async def create_tables():
 
         await conn.execute(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS asr_school INTEGER DEFAULT 1;"
-        )
-        await conn.execute(
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS calc_method INTEGER DEFAULT 14;"
         )
 
         print("All tables created successfully!")

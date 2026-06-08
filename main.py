@@ -29,14 +29,6 @@ dp = Dispatcher()
 
 PRAYERS = ('Fajr', 'Dhuhr', 'Asr', 'Maghrib', 'Isha')
 OFFSET_OPTIONS = (5, 10, 15, 20, 30)
-DEFAULT_METHOD = 14  # Spiritual Admin. of Muslims of Russia — closest regional fit for Central Asia
-METHOD_OPTIONS = {
-    14: "Russia/CA",
-    3: "MWL",
-    1: "Karachi",
-    2: "ISNA",
-    13: "Turkey",
-}
 SUMMARY_HOUR = 21
 calendar.setfirstweekday(calendar.MONDAY)
 
@@ -51,9 +43,9 @@ def fmt_time(hhmm: str) -> str:
 
 def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
     kb = [
-        [KeyboardButton(text="Profile"), KeyboardButton(text="Log Prayers")],
+        [KeyboardButton(text="Log Prayers"), KeyboardButton(text="View Schedule")],
         [KeyboardButton(text="Reports"), KeyboardButton(text="30-Day Overview")],
-        [KeyboardButton(text="View Schedule"), KeyboardButton(text="Settings")],
+        [KeyboardButton(text="Profile"), KeyboardButton(text="Settings")],
         [KeyboardButton(text="Change Location")],
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
@@ -130,20 +122,12 @@ def generate_calendar(year: int, month: int, user_today: date) -> InlineKeyboard
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def settings_keyboard(offset: int, asr_school: int, calc_method: int) -> InlineKeyboardMarkup:
+def settings_keyboard(offset: int, asr_school: int) -> InlineKeyboardMarkup:
     def off_label(n: int) -> str:
         return f"✅ {n}m" if n == offset else f"{n}m"
 
     def asr_label(school: int, name: str) -> str:
         return f"✅ {name}" if school == asr_school else name
-
-    def method_btn(mid: int, name: str) -> InlineKeyboardButton:
-        text = f"✅ {name}" if mid == calc_method else name
-        return InlineKeyboardButton(text=text, callback_data=f"set_method_{mid}")
-
-    items = list(METHOD_OPTIONS.items())
-    method_rows = [[method_btn(mid, name) for mid, name in items[i:i + 3]]
-                   for i in range(0, len(items), 3)]
 
     rows = [
         [InlineKeyboardButton(text="⏰ Reminder lead time", callback_data="ignore")],
@@ -153,8 +137,6 @@ def settings_keyboard(offset: int, asr_school: int, calc_method: int) -> InlineK
             InlineKeyboardButton(text=asr_label(1, "Hanafi"), callback_data="set_asr_1"),
             InlineKeyboardButton(text=asr_label(0, "Shafi'i"), callback_data="set_asr_0"),
         ],
-        [InlineKeyboardButton(text="📐 Calculation method", callback_data="ignore")],
-        *method_rows,
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -164,8 +146,7 @@ async def get_user_settings(db_pool: asyncpg.Pool, user_id: int):
         return await conn.fetchrow(
             "SELECT timezone, "
             "COALESCE(reminder_offset_mins, 15) AS reminder_offset_mins, "
-            "COALESCE(asr_school, 1) AS asr_school, "
-            "COALESCE(calc_method, 14) AS calc_method "
+            "COALESCE(asr_school, 1) AS asr_school "
             "FROM users WHERE user_id = $1",
             user_id
         )
@@ -372,16 +353,13 @@ async def daily_scheduler_job(db_pool: asyncpg.Pool, bot: Bot, scheduler: AsyncI
         users = await conn.fetch(
             "SELECT user_id, latitude, longitude, timezone, "
             "COALESCE(reminder_offset_mins, 15) AS reminder_offset_mins, "
-            "COALESCE(asr_school, 1) AS asr_school, "
-            "COALESCE(calc_method, 14) AS calc_method "
+            "COALESCE(asr_school, 1) AS asr_school "
             "FROM users WHERE latitude IS NOT NULL"
         )
 
     queued = 0
     for user in users:
-        prayer_data = await fetch_prayer_times(
-            user['latitude'], user['longitude'],
-            method=user['calc_method'], school=user['asr_school'])
+        prayer_data = await fetch_prayer_times(user['latitude'], user['longitude'], school=user['asr_school'])
         if not prayer_data:
             continue
 
@@ -524,13 +502,12 @@ async def location_handler(message: Message, db_pool: asyncpg.Pool, scheduler: A
 
     existing = await get_user_settings(db_pool, user_id)
     school = existing['asr_school'] if existing else 1
-    method = existing['calc_method'] if existing else DEFAULT_METHOD
 
     processing_msg = await message.answer(
         "Calculating your timezone and prayer schedules...",
         reply_markup=ReplyKeyboardRemove()
     )
-    prayer_data = await fetch_prayer_times(lat, lon, method=method, school=school)
+    prayer_data = await fetch_prayer_times(lat, lon, school=school)
     if not prayer_data:
         await processing_msg.delete()
         await message.answer("Failed to calculate your timezone. Please try sharing your location again later.")
@@ -605,7 +582,7 @@ async def settings_handler(message: Message, db_pool: asyncpg.Pool) -> None:
         return
     await message.answer(
         "<b>⚙️ Settings</b>\nChoose how early you want reminders and your Asr method.",
-        reply_markup=settings_keyboard(s['reminder_offset_mins'], s['asr_school'], s['calc_method']),
+        reply_markup=settings_keyboard(s['reminder_offset_mins'], s['asr_school']),
     )
 
 
@@ -701,7 +678,7 @@ async def set_offset_handler(callback: CallbackQuery, db_pool: asyncpg.Pool, sch
     s = await get_user_settings(db_pool, callback.from_user.id)
     await callback.message.edit_text(
         "<b>⚙️ Settings</b>\nChoose how early you want reminders and your Asr method.",
-        reply_markup=settings_keyboard(s['reminder_offset_mins'], s['asr_school'], s['calc_method']),
+        reply_markup=settings_keyboard(s['reminder_offset_mins'], s['asr_school']),
     )
     await callback.answer(f"Reminder lead time set to {offset} minutes")
 
@@ -716,24 +693,9 @@ async def set_asr_handler(callback: CallbackQuery, db_pool: asyncpg.Pool, schedu
     s = await get_user_settings(db_pool, callback.from_user.id)
     await callback.message.edit_text(
         "<b>⚙️ Settings</b>\nChoose how early you want reminders and your Asr method.",
-        reply_markup=settings_keyboard(s['reminder_offset_mins'], s['asr_school'], s['calc_method']),
+        reply_markup=settings_keyboard(s['reminder_offset_mins'], s['asr_school']),
     )
     await callback.answer(f"Asr method set to {'Hanafi' if school == 1 else 'Standard'}")
-
-
-@dp.callback_query(F.data.startswith("set_method_"))
-async def set_method_handler(callback: CallbackQuery, db_pool: asyncpg.Pool, scheduler: AsyncIOScheduler) -> None:
-    method = int(callback.data.split("_")[2])
-    async with db_pool.acquire() as conn:
-        await conn.execute("UPDATE users SET calc_method = $1 WHERE user_id = $2",
-                           method, callback.from_user.id)
-    await daily_scheduler_job(db_pool, bot, scheduler)
-    s = await get_user_settings(db_pool, callback.from_user.id)
-    await callback.message.edit_text(
-        "<b>⚙️ Settings</b>\nChoose how early you want reminders and your Asr method.",
-        reply_markup=settings_keyboard(s['reminder_offset_mins'], s['asr_school'], s['calc_method']),
-    )
-    await callback.answer(f"Calculation method set to {METHOD_OPTIONS.get(method, method)}")
 
 
 @dp.callback_query(F.data.startswith("pray_"))
@@ -804,11 +766,11 @@ async def fallback_handler(message: Message) -> None:
 async def set_bot_commands(bot: Bot) -> None:
     await bot.set_my_commands([
         BotCommand(command="start", description="Set location & reminders"),
-        BotCommand(command="profile", description="Your stats & streaks"),
         BotCommand(command="log", description="Log prayers"),
+        BotCommand(command="schedule", description="Today's upcoming alerts"),
         BotCommand(command="report", description="Daily / weekly / monthly reports"),
         BotCommand(command="overview", description="30-day activity grid"),
-        BotCommand(command="schedule", description="Today's upcoming alerts"),
+        BotCommand(command="profile", description="Your stats & streaks"),
         BotCommand(command="settings", description="Reminder time & Asr method"),
         BotCommand(command="location", description="Update your location"),
         BotCommand(command="help", description="How the bot works"),
