@@ -23,6 +23,7 @@ async def fetch_prayer_times(lat: float, lon: float, method: int = 2, school: in
                         "timezone": timezone,
                         "timings": {
                             "Fajr": timings["Fajr"],
+                            "Sunrise": timings["Sunrise"],
                             "Dhuhr": timings["Dhuhr"],
                             "Asr": timings["Asr"],
                             "Maghrib": timings["Maghrib"],

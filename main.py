@@ -28,9 +28,17 @@ bot = Bot(token=os.getenv('BOT_TOKEN'), default=DefaultBotProperties(parse_mode=
 dp = Dispatcher()
 
 PRAYERS = ('Fajr', 'Dhuhr', 'Asr', 'Maghrib', 'Isha')
-OFFSET_OPTIONS = (5, 10, 15, 20, 30)
+OFFSET_OPTIONS = (15, 5, 10, 20, 30)
 SUMMARY_HOUR = 21
 calendar.setfirstweekday(calendar.MONDAY)
+
+TIME_FMT = "%H:%M"
+
+def fmt_dt(dt) -> str:
+    return dt.strftime(TIME_FMT)
+
+def fmt_time(hhmm: str) -> str:
+    return datetime.strptime(hhmm.split()[0], "%H:%M").strftime(TIME_FMT)
 
 
 def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -137,7 +145,7 @@ async def get_user_settings(db_pool: asyncpg.Pool, user_id: int):
     async with db_pool.acquire() as conn:
         return await conn.fetchrow(
             "SELECT timezone, "
-            "COALESCE(reminder_offset_mins, 5) AS reminder_offset_mins, "
+            "COALESCE(reminder_offset_mins, 15) AS reminder_offset_mins, "
             "COALESCE(asr_school, 1) AS asr_school "
             "FROM users WHERE user_id = $1",
             user_id
@@ -215,26 +223,40 @@ async def build_range_report(db_pool, user_id, start_date, end_date, title) -> s
             "AND prayer_date BETWEEN $2 AND $3 GROUP BY prayer_name",
             user_id, start_date, end_date
         )
+        first_log = await conn.fetchval(
+            "SELECT MIN(prayer_date) FROM prayer_logs WHERE user_id = $1", user_id
+        )
     per = {r['prayer_name']: r['cnt'] for r in rows}
     cmap = await get_completion_map(db_pool, user_id, start_date)
 
-    num_days = (end_date - start_date).days + 1
+    effective_start = max(start_date, first_log) if first_log else end_date
+    num_days = (end_date - effective_start).days + 1
     total = sum(per.values())
     possible = num_days * 5
     rate = round(total / possible * 100) if possible else 0
-    full_days = sum(1 for d, c in cmap.items() if c == 5 and start_date <= d <= end_date)
+    full_days = sum(1 for d, c in cmap.items() if c == 5 and effective_start <= d <= end_date)
 
     prayer_lines = [f"{p}: {per.get(p, 0)}/{num_days}" for p in PRAYERS]
 
     text = (
-        f"<b>{title}</b>\n{start_date} → {end_date}\n\n"
+        f"<b>{title}</b>\n{effective_start} → {end_date} "
+        f"({num_days} {'day' if num_days == 1 else 'days'} tracked)\n\n"
         f"<b>Total:</b> {total}/{possible} ({rate}%)\n"
         f"<b>Perfect days:</b> {full_days}/{num_days}\n\n"
         f"<b>By prayer:</b>\n" + "\n".join(prayer_lines)
     )
-    if total > 0:
-        worst = min(PRAYERS, key=lambda p: per.get(p, 0))
-        text += f"\n\n💡 Most missed: <b>{worst}</b>"
+
+    if total == 0:
+        return text + "\n\nNo prayers logged in this period yet."
+
+    missed = {p: num_days - per.get(p, 0) for p in PRAYERS}
+    max_missed = max(missed.values())
+    if max_missed > 0:
+        worst = [p for p in PRAYERS if missed[p] == max_missed]
+        text += (f"\n\n💡 Most missed: <b>{', '.join(worst)}</b> "
+                 f"({max_missed} {'time' if max_missed == 1 else 'times'})")
+    else:
+        text += "\n\n🎉 No missed prayers — perfect period!"
     return text
 
 
@@ -253,6 +275,13 @@ async def build_overview(db_pool: asyncpg.Pool, user_id: int, tz_str: str | None
     window_start = today - timedelta(days=29)
     grid_start = window_start - timedelta(days=window_start.weekday())
     cmap = await get_completion_map(db_pool, user_id, grid_start)
+    async with db_pool.acquire() as conn:
+        first_log = await conn.fetchval(
+            "SELECT MIN(prayer_date) FROM prayer_logs WHERE user_id = $1", user_id
+        )
+
+    tracked_start = max(window_start, first_log) if first_log else today
+    tracked_days = (today - tracked_start).days + 1
 
     cells = []
     cur = grid_start
@@ -263,22 +292,22 @@ async def build_overview(db_pool: asyncpg.Pool, user_id: int, tz_str: str | None
         cells.append(None)
 
     def cell(day):
-        if day is None or day < window_start:
+        if day is None or day < tracked_start:
             return "⬛"
         return _square(cmap.get(day, 0))
 
     grid = "\n".join("".join(cell(d) for d in cells[i:i + 7]) for i in range(0, len(cells), 7))
 
-    perfect = sum(1 for d, c in cmap.items() if c == 5 and d >= window_start)
-    total = sum(c for d, c in cmap.items() if d >= window_start)
-    rate = round(total / (30 * 5) * 100)
+    perfect = sum(1 for d, c in cmap.items() if c == 5 and d >= tracked_start)
+    total = sum(c for d, c in cmap.items() if d >= tracked_start)
+    rate = round(total / (tracked_days * 5) * 100) if tracked_days else 0
     complete_dates = [d for d, c in cmap.items() if c == 5]
     current_streak, _ = compute_streaks(complete_dates, today)
 
     return (
         f"<b>📊 Last 30 Days</b>\n\n{grid}\n\n"
         "🟩 all 5  🟨 3-4  🟥 1-2  ⬜ none  ⬛ outside\n\n"
-        f"<b>Perfect days:</b> {perfect}/30\n"
+        f"<b>Perfect days:</b> {perfect}/{tracked_days}\n"
         f"<b>Completion:</b> {rate}%\n"
         f"🔥 <b>Current streak:</b> {current_streak} {'day' if current_streak == 1 else 'days'}"
     )
@@ -323,7 +352,7 @@ async def daily_scheduler_job(db_pool: asyncpg.Pool, bot: Bot, scheduler: AsyncI
     async with db_pool.acquire() as conn:
         users = await conn.fetch(
             "SELECT user_id, latitude, longitude, timezone, "
-            "COALESCE(reminder_offset_mins, 5) AS reminder_offset_mins, "
+            "COALESCE(reminder_offset_mins, 15) AS reminder_offset_mins, "
             "COALESCE(asr_school, 1) AS asr_school "
             "FROM users WHERE latitude IS NOT NULL"
         )
@@ -414,7 +443,7 @@ async def check_schedule_handler(message: Message, scheduler: AsyncIOScheduler) 
         parts = job.id.split('_')
         if parts[1] != user_id_str:
             continue
-        time_str = job.next_run_time.strftime("%I:%M %p")
+        time_str = fmt_dt(job.next_run_time)
         if parts[3] == "warning":
             user_jobs.append(f"<b>{parts[2]} Warning:</b> {time_str}")
         elif parts[3] == "exact":
@@ -500,11 +529,14 @@ async def location_handler(message: Message, db_pool: asyncpg.Pool, scheduler: A
     await daily_scheduler_job(db_pool, bot, scheduler)
 
     t = prayer_data['timings']
+    timings_lines = "\n".join(
+        f"{name}: {fmt_time(t[name])}"
+        for name in ("Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha")
+    )
     await processing_msg.delete()
     await message.answer(
         f"<b>Location registered successfully!</b>\n<b>Timezone:</b> {user_timezone}\n\n"
-        f"<b>Today's Timings:</b>\nFajr: {t['Fajr']}\nDhuhr: {t['Dhuhr']}\n"
-        f"Asr: {t['Asr']}\nMaghrib: {t['Maghrib']}\nIsha: {t['Isha']}\n\n"
+        f"<b>Today's Timings:</b>\n{timings_lines}\n\n"
         "I have automatically set up your prayer alerts!",
         reply_markup=get_main_menu_keyboard()
     )
@@ -697,7 +729,7 @@ async def log_prayer_handler(callback: CallbackQuery, db_pool: asyncpg.Pool, sch
         job = scheduler.get_job(f"reminder_{user_id}_{prayer_name}_exact")
         if job:
             await callback.answer(
-                f"It is not time for {prayer_name} yet. Adhan is at {job.next_run_time.strftime('%I:%M %p')}.",
+                f"It is not time for {prayer_name} yet. Adhan is at {fmt_dt(job.next_run_time)}.",
                 show_alert=True
             )
             return

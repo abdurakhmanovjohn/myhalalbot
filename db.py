@@ -25,7 +25,7 @@ async def create_tables():
                 timezone VARCHAR(50) DEFAULT 'UTC',
                 latitude DOUBLE PRECISION,
                 longitude DOUBLE PRECISION,
-                reminder_offset_mins INTEGER DEFAULT 5,
+                reminder_offset_mins INTEGER DEFAULT 15,
                 asr_school INTEGER DEFAULT 1
             );
         ''')
