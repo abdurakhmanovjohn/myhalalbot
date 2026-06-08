@@ -135,8 +135,11 @@ def settings_keyboard(offset: int, asr_school: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🕌 Asr calculation", callback_data="ignore")],
         [
             InlineKeyboardButton(text=asr_label(1, "Hanafi"), callback_data="set_asr_1"),
-            InlineKeyboardButton(text=asr_label(0, "Shafi'i"), callback_data="set_asr_0"),
+            InlineKeyboardButton(text=asr_label(0, "Standard (Shafi'i)"), callback_data="set_asr_0"),
         ],
+        [InlineKeyboardButton(text="— Danger zone —", callback_data="ignore")],
+        [InlineKeyboardButton(text="🗑 Reset prayer logs", callback_data="danger_reset")],
+        [InlineKeyboardButton(text="❌ Delete my data", callback_data="danger_delete")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -393,6 +396,66 @@ async def daily_scheduler_job(db_pool: asyncpg.Pool, bot: Bot, scheduler: AsyncI
 
     logging.info(f"Successfully queued {queued} upcoming jobs for today.")
 
+@dp.callback_query(F.data == "settings_home")
+async def settings_home_handler(callback: CallbackQuery, db_pool: asyncpg.Pool) -> None:
+    s = await get_user_settings(db_pool, callback.from_user.id)
+    await callback.message.edit_text(
+        "<b>⚙️ Settings</b>\nChoose how early you want reminders and your Asr method.",
+        reply_markup=settings_keyboard(s['reminder_offset_mins'], s['asr_school']),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "danger_reset")
+async def danger_reset_handler(callback: CallbackQuery) -> None:
+    await callback.message.edit_text(
+        "⚠️ <b>Reset prayer logs?</b>\n\nThis deletes <b>all</b> your logged prayers. "
+        "Your location and settings are kept. This cannot be undone.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Yes, reset", callback_data="danger_reset_confirm"),
+            InlineKeyboardButton(text="Cancel", callback_data="settings_home"),
+        ]]),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "danger_reset_confirm")
+async def danger_reset_confirm_handler(callback: CallbackQuery, db_pool: asyncpg.Pool) -> None:
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM prayer_logs WHERE user_id = $1", callback.from_user.id)
+    await callback.message.edit_text("🗑 Your prayer logs have been reset.")
+    await callback.answer("Prayer logs reset")
+
+
+@dp.callback_query(F.data == "danger_delete")
+async def danger_delete_handler(callback: CallbackQuery) -> None:
+    await callback.message.edit_text(
+        "⚠️ <b>Delete all your data?</b>\n\nThis removes your account, location, settings, "
+        "and every logged prayer, and stops all reminders. This cannot be undone.\n\n"
+        "You can re-register anytime with /start.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Yes, delete everything", callback_data="danger_delete_confirm"),
+            InlineKeyboardButton(text="Cancel", callback_data="settings_home"),
+        ]]),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "danger_delete_confirm")
+async def danger_delete_confirm_handler(callback: CallbackQuery, db_pool: asyncpg.Pool, scheduler: AsyncIOScheduler) -> None:
+    user_id = callback.from_user.id
+    for job in scheduler.get_jobs():
+        if job.id.startswith(f"reminder_{user_id}_") or job.id == f"summary_{user_id}":
+            job.remove()
+    async with db_pool.acquire() as conn:
+        await conn.execute("DELETE FROM users WHERE user_id = $1", user_id)
+    await callback.message.edit_text("✅ All your data has been deleted.")
+    await callback.message.answer(
+        "Send /start whenever you'd like to register again.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    await callback.answer("Data deleted")
+
 
 @dp.message(CommandStart())
 async def command_start_handler(message: Message) -> None:
@@ -419,11 +482,11 @@ async def help_handler(message: Message) -> None:
     text = (
         "<b>Halal Bot — Help</b>\n\n"
         "/start — share location and set up reminders\n"
-        "Profile — stats and streaks\n"
         "Log Prayers — mark prayers, jump to any day or pick a date\n"
+        "View Schedule — today's upcoming alerts\n"
         "Reports — today / 7-day / 30-day summaries\n"
         "30-Day Overview — your activity grid\n"
-        "View Schedule — today's upcoming alerts\n"
+        "Profile — stats and streaks\n"
         "Settings — reminder lead time and Asr calculation\n"
         "Change Location — update your timezone and prayer times\n\n"
         "I send a heads-up before each prayer, an alert at the exact time, "
