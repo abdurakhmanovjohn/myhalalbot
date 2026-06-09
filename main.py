@@ -600,7 +600,8 @@ async def location_handler(message: Message, db_pool: asyncpg.Pool, scheduler: A
     await message.answer(
         f"<b>Location registered successfully!</b>\n<b>Timezone:</b> {user_timezone}\n\n"
         f"<b>Today's Timings:</b>\n{timings_lines}\n\n"
-        "I have automatically set up your prayer alerts!",
+        "I have automatically set up your prayer alerts!\n\n"
+        "🔔 Make sure notifications are <b>on</b> for this chat so you don't miss any alerts.",
         reply_markup=get_main_menu_keyboard()
     )
 
