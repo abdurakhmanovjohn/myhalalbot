@@ -329,6 +329,16 @@ async def send_prayer_reminder(bot: Bot, user_id: int, prayer_name: str, is_exac
     except Exception as e:
         logging.error(f"Failed to send reminder to {user_id}: {e}")
 
+async def send_fajr_end_reminder(bot: Bot, user_id: int, mins: int, ended: bool):
+    try:
+        if ended:
+            text = "<b>Fajr time has ended.</b>\nThe sun has risen — Fajr is over for today."
+        else:
+            text = (f"<b>Fajr ends in {mins} minutes.</b>\n"
+                    "If you haven't prayed Fajr yet, hurry before sunrise.")
+        await bot.send_message(chat_id=user_id, text=text)
+    except Exception as e:
+        logging.error(f"Failed to send Fajr-end reminder to {user_id}: {e}")
 
 async def send_summary_report(bot: Bot, db_pool: asyncpg.Pool, user_id: int, tz_str: str):
     today = user_local_date(tz_str)
@@ -370,10 +380,27 @@ async def daily_scheduler_job(db_pool: asyncpg.Pool, bot: Bot, scheduler: AsyncI
         now = datetime.now(user_tz)
 
         for prayer_name, time_str in prayer_data['timings'].items():
+            hour, minute = map(int, time_str.split(':'))
+            event_dt = user_tz.localize(datetime(now.year, now.month, now.day, hour, minute))
+
+            if prayer_name == "Sunrise":
+                warn_dt = event_dt - timedelta(minutes=user['reminder_offset_mins'])
+                if warn_dt > now:
+                    scheduler.add_job(send_fajr_end_reminder, 'date', run_date=warn_dt,
+                                      id=f"reminder_{user['user_id']}_Sunrise_warning",
+                                      args=[bot, user['user_id'], user['reminder_offset_mins'], False])
+                    queued += 1
+                if event_dt > now:
+                    scheduler.add_job(send_fajr_end_reminder, 'date', run_date=event_dt,
+                                      id=f"reminder_{user['user_id']}_Sunrise_exact",
+                                      args=[bot, user['user_id'], user['reminder_offset_mins'], True])
+                    queued += 1
+                continue
+
             if prayer_name not in PRAYERS:
                 continue
-            hour, minute = map(int, time_str.split(':'))
-            adhan_dt = user_tz.localize(datetime(now.year, now.month, now.day, hour, minute))
+
+            adhan_dt = event_dt
             reminder_dt = adhan_dt - timedelta(minutes=user['reminder_offset_mins'])
 
             if reminder_dt > now:
@@ -507,7 +534,12 @@ async def check_schedule_handler(message: Message, scheduler: AsyncIOScheduler) 
         if parts[1] != user_id_str:
             continue
         time_str = fmt_dt(job.next_run_time)
-        if parts[3] == "warning":
+        if parts[2] == "Sunrise":
+            if parts[3] == "warning":
+                user_jobs.append(f"<b>Fajr ending soon:</b> {time_str}")
+            else:
+                user_jobs.append(f"<b>Fajr ends (sunrise):</b> {time_str}\n")
+        elif parts[3] == "warning":
             user_jobs.append(f"<b>{parts[2]} Warning:</b> {time_str}")
         elif parts[3] == "exact":
             user_jobs.append(f"<b>{parts[2]} Adhan:</b> {time_str}\n")
