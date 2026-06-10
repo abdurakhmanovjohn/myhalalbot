@@ -5,13 +5,16 @@ A Telegram bot that delivers accurate, location-based prayer times and helps you
 ## Features
 
 - **Location-based prayer times** — uses the [Aladhan API](https://aladhan.com/prayer-times-api) to compute timings from your shared location and resolves your timezone automatically. Today's timings include sunrise (the end of Fajr time).
-- **Two-stage reminders** — a configurable heads-up before each prayer (so you can make Wudu) and an alert at the exact adhan time with a one-tap _Mark as Prayed_ button.
+- **Two-stage prayer reminders** — a configurable heads-up before each prayer (so you can make Wudu) and an alert at the exact adhan time with a one-tap _Mark as Prayed_ button.
+- **Fajr-end reminders** — a warning N minutes before sunrise ("Fajr ends in N minutes, hurry") and an exact notification at sunrise ("Fajr time has ended") so you never accidentally miss the window.
+- **Time-gated logging** — logging a prayer on the current day is blocked if the adhan hasn't fired yet; the bot replies with the scheduled adhan time so you know when to come back.
 - **End-of-day summary** — an automatic recap at 21:00 your local time, with a weekly recap on Sundays and a monthly recap on the last day of the month.
 - **Manual logging** — toggle any of the five daily prayers on or off. Navigate day by day, jump back to _Today_, or open a month **calendar** to pick any past date. Future dates are locked.
 - **Streaks** — current and longest streak of fully-completed days, shown in your profile. An unfinished today never breaks your streak.
 - **Reports** — on-demand daily, 7-day, and 30-day summaries with completion rate, perfect-day count, a per-prayer breakdown, and your most-missed prayer(s). Stats are scaled to how long you've actually been tracking, so new users aren't penalised for days before they joined, and ties for the most-missed prayer are all listed.
 - **30-day overview** — a GitHub-style activity grid colouring each day by how many prayers you completed. Days before you started show as outside the tracked range rather than as misses.
-- **Settings** — change your reminder lead time (5–30 min, default 15) and your Asr calculation method (Hanafi or Standard/Shafi'i); changes apply immediately.
+- **Settings** — change your reminder lead time (5/10/15/20/30 min, default 15) and your Asr calculation method (Hanafi or Standard/Shafi'i); changes apply immediately. A **Danger Zone** section lets you reset all prayer logs (keeping your location and settings) or delete your entire account and stop all reminders.
+- **Persistent menu** — a reply keyboard stays visible in the chat for one-tap access to all main functions without needing to type commands.
 - **Change location** — update your timezone and prayer times at any time without losing your settings or logs.
 
 ## Tech stack
@@ -106,21 +109,23 @@ halal_bot/
 
 ## Commands
 
-| Command     | Description                         |
-| ----------- | ----------------------------------- |
-| `/start`    | Set location and set up reminders   |
-| `/profile`  | View stats and streaks              |
-| `/log`      | Log prayers (with calendar & today) |
-| `/report`   | Daily / weekly / monthly reports    |
-| `/overview` | 30-day activity grid                |
-| `/schedule` | Today's upcoming alerts             |
-| `/settings` | Reminder lead time & Asr method     |
-| `/location` | Update your location                |
-| `/help`     | How the bot works                   |
+All commands are also accessible via the persistent reply keyboard.
+
+| Command      | Keyboard button    | Description                         |
+| ------------ | ------------------ | ----------------------------------- |
+| `/start`     | —                  | Set location and set up reminders   |
+| `/log`       | Log Prayers        | Log prayers (with calendar & today) |
+| `/schedule`  | View Schedule      | Today's upcoming alerts             |
+| `/report`    | Reports            | Daily / weekly / monthly reports    |
+| `/overview`  | 30-Day Overview    | 30-day activity grid                |
+| `/profile`   | Profile            | View stats and streaks              |
+| `/settings`  | Settings           | Reminder lead time & Asr method     |
+| `/location`  | Change Location    | Update your location                |
+| `/help`      | —                  | How the bot works                   |
 
 ## Notes
 
 - **Time format.** Times are displayed in 24-hour format throughout, controlled by a single `TIME_FMT` constant in `main.py` (set it to `"%I:%M %p"` for 12-hour AM/PM).
-- **Calculation method.** Timings use the Aladhan ISNA method (`method=2`) by default, with the Asr school selectable per user (Hanafi by default). The method itself isn't yet user-configurable; it can be exposed in Settings if needed, since the method dramatically affects Fajr and Isha times across regions.
+- **Calculation method.** Timings use Aladhan `method=14` by default, with the Asr school selectable per user (Hanafi by default). The method itself isn't yet user-configurable; it can be exposed in Settings if needed, since the method dramatically affects Fajr and Isha times across regions.
 - **Scheduling persistence.** Reminders and summaries are held in APScheduler's in-memory store. They are re-queued automatically at 00:01 local each day and again on startup, so the bot should run as a long-lived process for reminders to fire reliably.
 - **Security.** Keep `.env` out of version control (it's listed in `.gitignore`). If a bot token is ever exposed, revoke and reissue it via @BotFather.
