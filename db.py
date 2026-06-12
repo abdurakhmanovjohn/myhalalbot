@@ -26,7 +26,8 @@ async def create_tables():
                 latitude DOUBLE PRECISION,
                 longitude DOUBLE PRECISION,
                 reminder_offset_mins INTEGER DEFAULT 15,
-                asr_school INTEGER DEFAULT 1
+                asr_school INTEGER DEFAULT 1,
+                calc_method INTEGER DEFAULT 14
             );
         ''')
 
@@ -38,12 +39,32 @@ async def create_tables():
                 prayer_name VARCHAR(20) NOT NULL,
                 prayer_date DATE NOT NULL,
                 is_completed BOOLEAN DEFAULT FALSE,
+                category VARCHAR(10) DEFAULT 'fard',
                 UNIQUE(user_id, prayer_name, prayer_date)
+            );
+        ''')
+
+        print("Creating 'qaza' table...")
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS qaza (
+                user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
+                prayer_name VARCHAR(20) NOT NULL,
+                remaining INTEGER NOT NULL DEFAULT 0 CHECK (remaining >= 0),
+                PRIMARY KEY (user_id, prayer_name)
             );
         ''')
 
         await conn.execute(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS asr_school INTEGER DEFAULT 1;"
+        )
+        await conn.execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS calc_method INTEGER DEFAULT 14;"
+        )
+        await conn.execute(
+            "ALTER TABLE prayer_logs ADD COLUMN IF NOT EXISTS category VARCHAR(10) DEFAULT 'fard';"
+        )
+        await conn.execute(
+            "UPDATE prayer_logs SET category = 'fard' WHERE category IS NULL;"
         )
 
         print("All tables created successfully!")

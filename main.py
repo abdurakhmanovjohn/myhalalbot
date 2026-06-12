@@ -29,6 +29,8 @@ dp = Dispatcher()
 
 PRAYERS = ('Fajr', 'Dhuhr', 'Asr', 'Maghrib', 'Isha')
 OFFSET_OPTIONS = (5, 10, 15, 20, 30)
+NAFL_PRAYERS = ('Tahajjud', 'Duha', 'Ishraq', 'Awwabin', 'Tarawih')
+QAZA_PRAYERS = ('Fajr', 'Dhuhr', 'Asr', 'Maghrib', 'Isha', 'Witr')
 SUMMARY_HOUR = 21
 calendar.setfirstweekday(calendar.MONDAY)
 
@@ -43,7 +45,8 @@ def fmt_time(hhmm: str) -> str:
 
 def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
     kb = [
-        [KeyboardButton(text="Log Prayers"), KeyboardButton(text="View Schedule")],
+        [KeyboardButton(text="Log Prayers"), KeyboardButton(text="Nafl")],
+        [KeyboardButton(text="Qaza"), KeyboardButton(text="View Schedule")],
         [KeyboardButton(text="Reports"), KeyboardButton(text="30-Day Overview")],
         [KeyboardButton(text="Profile"), KeyboardButton(text="Settings")],
         [KeyboardButton(text="Change Location")],
@@ -169,7 +172,7 @@ async def get_completed_prayers(db_pool: asyncpg.Pool, user_id: int, target_date
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT prayer_name FROM prayer_logs "
-            "WHERE user_id = $1 AND prayer_date = $2 AND is_completed = TRUE",
+            "WHERE user_id = $1 AND prayer_date = $2 AND is_completed = TRUE AND category = 'fard'",
             user_id, target_date
         )
     return {r['prayer_name'] for r in rows}
@@ -179,7 +182,7 @@ async def get_completion_map(db_pool: asyncpg.Pool, user_id: int, start_date: da
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT prayer_date, COUNT(DISTINCT prayer_name) AS cnt FROM prayer_logs "
-            "WHERE user_id = $1 AND is_completed = TRUE AND prayer_date >= $2 "
+            "WHERE user_id = $1 AND is_completed = TRUE AND prayer_date >= $2 AND category = 'fard' "
             "GROUP BY prayer_date",
             user_id, start_date
         )
@@ -223,11 +226,11 @@ async def build_range_report(db_pool, user_id, start_date, end_date, title) -> s
         rows = await conn.fetch(
             "SELECT prayer_name, COUNT(*) AS cnt FROM prayer_logs "
             "WHERE user_id = $1 AND is_completed = TRUE "
-            "AND prayer_date BETWEEN $2 AND $3 GROUP BY prayer_name",
+            "AND category = 'fard' AND prayer_date BETWEEN $2 AND $3 GROUP BY prayer_name",
             user_id, start_date, end_date
         )
         first_log = await conn.fetchval(
-            "SELECT MIN(prayer_date) FROM prayer_logs WHERE user_id = $1", user_id
+            "SELECT MIN(prayer_date) FROM prayer_logs WHERE user_id = $1 AND category = 'fard'", user_id
         )
     per = {r['prayer_name']: r['cnt'] for r in rows}
     cmap = await get_completion_map(db_pool, user_id, start_date)
@@ -280,7 +283,7 @@ async def build_overview(db_pool: asyncpg.Pool, user_id: int, tz_str: str | None
     cmap = await get_completion_map(db_pool, user_id, grid_start)
     async with db_pool.acquire() as conn:
         first_log = await conn.fetchval(
-            "SELECT MIN(prayer_date) FROM prayer_logs WHERE user_id = $1", user_id
+            "SELECT MIN(prayer_date) FROM prayer_logs WHERE user_id = $1 AND category = 'fard'", user_id
         )
 
     tracked_start = max(window_start, first_log) if first_log else today
@@ -316,6 +319,62 @@ async def build_overview(db_pool: asyncpg.Pool, user_id: int, tz_str: str | None
     )
 
 
+def generate_nafl_keyboard(target_date: date, completed: set[str]) -> InlineKeyboardMarkup:
+    date_str = target_date.strftime("%Y-%m-%d")
+    prev_date = (target_date - timedelta(days=1)).strftime("%Y-%m-%d")
+    next_date = (target_date + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    def btn(name: str) -> InlineKeyboardButton:
+        label = f"\u2705 {name}" if name in completed else f"\u25ab\ufe0f {name}"
+        return InlineKeyboardButton(text=label, callback_data=f"nafl_set_{name}_{date_str}")
+
+    rows = [[btn(NAFL_PRAYERS[i]), btn(NAFL_PRAYERS[i + 1])]
+            if i + 1 < len(NAFL_PRAYERS) else [btn(NAFL_PRAYERS[i])]
+            for i in range(0, len(NAFL_PRAYERS), 2)]
+    rows.append([
+        InlineKeyboardButton(text="\u2039 Prev", callback_data=f"nafl_nav_{prev_date}"),
+        InlineKeyboardButton(text="Today", callback_data="nafl_today"),
+        InlineKeyboardButton(text="Next \u203a", callback_data=f"nafl_nav_{next_date}"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def generate_qaza_main(balances: dict) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=f"{p} \u2014 {balances[p]}", callback_data=f"qaza_open_{p}")]
+            for p in QAZA_PRAYERS]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def generate_qaza_adjuster(name: str) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="\u221210", callback_data=f"qaza_adj_{name}_-10"),
+         InlineKeyboardButton(text="\u22125", callback_data=f"qaza_adj_{name}_-5"),
+         InlineKeyboardButton(text="\u22121", callback_data=f"qaza_adj_{name}_-1")],
+        [InlineKeyboardButton(text="+1", callback_data=f"qaza_adj_{name}_1"),
+         InlineKeyboardButton(text="+10", callback_data=f"qaza_adj_{name}_10"),
+         InlineKeyboardButton(text="+50", callback_data=f"qaza_adj_{name}_50")],
+        [InlineKeyboardButton(text="\u2039 Back", callback_data="qaza_home")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def get_completed_nafl(db_pool: asyncpg.Pool, user_id: int, target_date: date) -> set[str]:
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT prayer_name FROM prayer_logs "
+            "WHERE user_id = $1 AND prayer_date = $2 AND is_completed = TRUE AND category = 'nafl'",
+            user_id, target_date
+        )
+    return {r['prayer_name'] for r in rows}
+
+
+async def get_qaza(db_pool: asyncpg.Pool, user_id: int) -> dict:
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT prayer_name, remaining FROM qaza WHERE user_id = $1", user_id)
+    found = {r['prayer_name']: r['remaining'] for r in rows}
+    return {p: found.get(p, 0) for p in QAZA_PRAYERS}
+
+
 async def send_prayer_reminder(bot: Bot, user_id: int, prayer_name: str, is_exact: bool):
     try:
         if is_exact:
@@ -329,16 +388,18 @@ async def send_prayer_reminder(bot: Bot, user_id: int, prayer_name: str, is_exac
     except Exception as e:
         logging.error(f"Failed to send reminder to {user_id}: {e}")
 
+
 async def send_fajr_end_reminder(bot: Bot, user_id: int, mins: int, ended: bool):
     try:
         if ended:
-            text = "<b>Fajr time has ended.</b>\nThe sun has risen — Fajr is over for today."
+            text = "🌅 <b>Fajr time has ended.</b>\nThe sun has risen — Fajr is over for today."
         else:
-            text = (f"<b>Fajr ends in {mins} minutes.</b>\n"
+            text = (f"⏳ <b>Fajr ends in {mins} minutes.</b>\n"
                     "If you haven't prayed Fajr yet, hurry before sunrise.")
         await bot.send_message(chat_id=user_id, text=text)
     except Exception as e:
         logging.error(f"Failed to send Fajr-end reminder to {user_id}: {e}")
+
 
 async def send_summary_report(bot: Bot, db_pool: asyncpg.Pool, user_id: int, tz_str: str):
     today = user_local_date(tz_str)
@@ -423,6 +484,7 @@ async def daily_scheduler_job(db_pool: asyncpg.Pool, bot: Bot, scheduler: AsyncI
 
     logging.info(f"Successfully queued {queued} upcoming jobs for today.")
 
+
 @dp.callback_query(F.data == "settings_home")
 async def settings_home_handler(callback: CallbackQuery, db_pool: asyncpg.Pool) -> None:
     s = await get_user_settings(db_pool, callback.from_user.id)
@@ -489,12 +551,13 @@ async def command_start_handler(message: Message) -> None:
     await message.answer(
         f"Assalamu alaykum, {message.from_user.full_name}!\n\n"
         "To track your prayers and send accurate daily reminders, I need to know your local timezone.\n"
-        "Please press the button below to share your location.",
+        "Please press the button below to share your location.\n\n"
+        "🔔 Make sure notifications are <b>on</b> for this chat so you don't miss any prayer alerts.",
         reply_markup=share_location_keyboard()
     )
 
 
-@dp.message(Command("location"))
+@dp.message(Command("change_location"))
 @dp.message(F.text == "Change Location")
 async def change_location_handler(message: Message) -> None:
     await message.answer(
@@ -504,25 +567,36 @@ async def change_location_handler(message: Message) -> None:
     )
 
 
+@dp.message(Command("test"))
+async def test_handler(message: Message) -> None:
+    await message.answer(
+        "🔔 <b>Test notification.</b>\nIf this arrived as a notification, your alerts are working. "
+        "If it was silent, enable notifications for this chat in Telegram's settings."
+    )
+
+
 @dp.message(Command("help"))
 async def help_handler(message: Message) -> None:
     text = (
         "<b>Halal Bot — Help</b>\n\n"
         "/start — share location and set up reminders\n"
-        "/log — mark prayers, jump to any day or pick a date\n"
-        "/schedule — today's upcoming alerts\n"
-        "/report — today / 7-day / 30-day summaries\n"
+        "/log_prayers — mark prayers, jump to any day or pick a date\n"
+        "/nafl — log voluntary (nafl) prayers\n"
+        "/qaza — track and pay down missed prayers\n"
+        "/view_schedule — today's upcoming alerts\n"
+        "/reports — today / 7-day / 30-day summaries\n"
         "/overview — your activity grid\n"
         "/profile — stats and streaks\n"
         "/settings — reminder lead time and Asr calculation\n"
-        "/location — update your timezone and prayer times\n\n"
+        "/change_location — update your timezone and prayer times\n"
+        "/test — send a test notification\n\n"
         "I send a heads-up before each prayer, an alert at the exact time, "
-        "and an end-of-day summary."
+        "a Fajr-ending warning before sunrise, and an end-of-day summary."
     )
     await message.answer(text, reply_markup=get_main_menu_keyboard())
 
 
-@dp.message(Command("schedule"))
+@dp.message(Command("view_schedule"))
 @dp.message(F.text == "View Schedule")
 async def check_schedule_handler(message: Message, scheduler: AsyncIOScheduler) -> None:
     user_id_str = str(message.from_user.id)
@@ -560,11 +634,11 @@ async def profile_handler(message: Message, db_pool: asyncpg.Pool) -> None:
     stats_query = """
         SELECT COUNT(*) AS total_prayers,
                COUNT(*) FILTER (WHERE prayer_date = $2) AS today_prayers
-        FROM prayer_logs WHERE user_id = $1 AND is_completed = TRUE;
+        FROM prayer_logs WHERE user_id = $1 AND is_completed = TRUE AND category = 'fard';
     """
     streak_query = """
         SELECT prayer_date FROM prayer_logs
-        WHERE user_id = $1 AND is_completed = TRUE
+        WHERE user_id = $1 AND is_completed = TRUE AND category = 'fard'
         GROUP BY prayer_date HAVING COUNT(DISTINCT prayer_name) = 5
         ORDER BY prayer_date;
     """
@@ -638,7 +712,7 @@ async def location_handler(message: Message, db_pool: asyncpg.Pool, scheduler: A
     )
 
 
-@dp.message(Command("log"))
+@dp.message(Command("log_prayers"))
 @dp.message(F.text == "Log Prayers")
 async def log_manual_handler(message: Message, db_pool: asyncpg.Pool) -> None:
     tz_str = await get_user_timezone(db_pool, message.from_user.id)
@@ -653,7 +727,7 @@ async def log_manual_handler(message: Message, db_pool: asyncpg.Pool) -> None:
     )
 
 
-@dp.message(Command("report"))
+@dp.message(Command("reports"))
 @dp.message(F.text == "Reports")
 async def reports_handler(message: Message) -> None:
     await message.answer("📑 <b>Reports</b> — choose a period:", reply_markup=report_selector())
@@ -816,7 +890,7 @@ async def log_prayer_handler(callback: CallbackQuery, db_pool: asyncpg.Pool, sch
     async with db_pool.acquire() as conn:
         current = await conn.fetchval(
             "SELECT is_completed FROM prayer_logs "
-            "WHERE user_id = $1 AND prayer_name = $2 AND prayer_date = $3",
+            "WHERE user_id = $1 AND prayer_name = $2 AND prayer_date = $3 AND category = 'fard'",
             user_id, prayer_name, target_date
         )
     new_state = (not bool(current)) if from_menu else True
@@ -831,8 +905,8 @@ async def log_prayer_handler(callback: CallbackQuery, db_pool: asyncpg.Pool, sch
             return
 
     upsert = """
-        INSERT INTO prayer_logs (user_id, prayer_name, prayer_date, is_completed)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO prayer_logs (user_id, prayer_name, prayer_date, is_completed, category)
+        VALUES ($1, $2, $3, $4, 'fard')
         ON CONFLICT (user_id, prayer_name, prayer_date)
         DO UPDATE SET is_completed = $4;
     """
@@ -851,6 +925,129 @@ async def log_prayer_handler(callback: CallbackQuery, db_pool: asyncpg.Pool, sch
         await callback.answer(f"{prayer_name} logged ✅")
 
 
+@dp.message(Command("nafl"))
+@dp.message(F.text == "Nafl")
+async def nafl_handler(message: Message, db_pool: asyncpg.Pool) -> None:
+    tz_str = await get_user_timezone(db_pool, message.from_user.id)
+    if not tz_str:
+        await message.answer("Please set your location first using /start.")
+        return
+    today = user_local_date(tz_str)
+    completed = await get_completed_nafl(db_pool, message.from_user.id, today)
+    await message.answer(
+        f"<b>\U0001f319 Nafl \u2014 {today}</b>\nTap to toggle. \u2705 means done.",
+        reply_markup=generate_nafl_keyboard(today, completed),
+    )
+
+
+@dp.callback_query(F.data == "nafl_today")
+async def nafl_today_handler(callback: CallbackQuery, db_pool: asyncpg.Pool) -> None:
+    tz_str = await get_user_timezone(db_pool, callback.from_user.id)
+    today = user_local_date(tz_str)
+    completed = await get_completed_nafl(db_pool, callback.from_user.id, today)
+    await callback.message.edit_text(
+        f"<b>\U0001f319 Nafl \u2014 {today}</b>\nTap to toggle. \u2705 means done.",
+        reply_markup=generate_nafl_keyboard(today, completed),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("nafl_nav_"))
+async def nafl_nav_handler(callback: CallbackQuery, db_pool: asyncpg.Pool) -> None:
+    target_date = datetime.strptime(callback.data[len("nafl_nav_"):], "%Y-%m-%d").date()
+    completed = await get_completed_nafl(db_pool, callback.from_user.id, target_date)
+    await callback.message.edit_text(
+        f"<b>\U0001f319 Nafl \u2014 {target_date}</b>\nTap to toggle. \u2705 means done.",
+        reply_markup=generate_nafl_keyboard(target_date, completed),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("nafl_set_"))
+async def nafl_set_handler(callback: CallbackQuery, db_pool: asyncpg.Pool) -> None:
+    name, date_str = callback.data[len("nafl_set_"):].rsplit("_", 1)
+    target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    user_id = callback.from_user.id
+
+    tz_str = await get_user_timezone(db_pool, user_id)
+    if target_date > user_local_date(tz_str):
+        await callback.answer("You cannot log future dates.", show_alert=True)
+        return
+
+    async with db_pool.acquire() as conn:
+        current = await conn.fetchval(
+            "SELECT is_completed FROM prayer_logs "
+            "WHERE user_id = $1 AND prayer_name = $2 AND prayer_date = $3 AND category = 'nafl'",
+            user_id, name, target_date
+        )
+        new_state = not bool(current)
+        await conn.execute(
+            "INSERT INTO prayer_logs (user_id, prayer_name, prayer_date, is_completed, category) "
+            "VALUES ($1, $2, $3, $4, 'nafl') "
+            "ON CONFLICT (user_id, prayer_name, prayer_date) DO UPDATE SET is_completed = $4",
+            user_id, name, target_date, new_state
+        )
+    completed = await get_completed_nafl(db_pool, user_id, target_date)
+    await callback.message.edit_reply_markup(reply_markup=generate_nafl_keyboard(target_date, completed))
+    await callback.answer(f"{name} {'\u2705' if new_state else 'unmarked'}")
+
+
+@dp.message(Command("qaza"))
+@dp.message(F.text == "Qaza")
+async def qaza_handler(message: Message, db_pool: asyncpg.Pool) -> None:
+    balances = await get_qaza(db_pool, message.from_user.id)
+    total = sum(balances.values())
+    await message.answer(
+        f"<b>\U0001f9ee Qaza \u2014 missed prayers</b>\nTotal remaining: <b>{total}</b>\n\n"
+        "Tap a prayer to add to your count (+) or record make-ups (\u2212).",
+        reply_markup=generate_qaza_main(balances),
+    )
+
+
+@dp.callback_query(F.data == "qaza_home")
+async def qaza_home_handler(callback: CallbackQuery, db_pool: asyncpg.Pool) -> None:
+    balances = await get_qaza(db_pool, callback.from_user.id)
+    total = sum(balances.values())
+    await callback.message.edit_text(
+        f"<b>\U0001f9ee Qaza \u2014 missed prayers</b>\nTotal remaining: <b>{total}</b>\n\n"
+        "Tap a prayer to add to your count (+) or record make-ups (\u2212).",
+        reply_markup=generate_qaza_main(balances),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("qaza_open_"))
+async def qaza_open_handler(callback: CallbackQuery, db_pool: asyncpg.Pool) -> None:
+    name = callback.data[len("qaza_open_"):]
+    balances = await get_qaza(db_pool, callback.from_user.id)
+    await callback.message.edit_text(
+        f"<b>{name} \u2014 {balances.get(name, 0)} remaining</b>\n\n"
+        "\u2212 records make-ups, + adds to your count.",
+        reply_markup=generate_qaza_adjuster(name),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("qaza_adj_"))
+async def qaza_adj_handler(callback: CallbackQuery, db_pool: asyncpg.Pool) -> None:
+    name, delta_str = callback.data[len("qaza_adj_"):].rsplit("_", 1)
+    delta = int(delta_str)
+    user_id = callback.from_user.id
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO qaza (user_id, prayer_name, remaining) VALUES ($1, $2, GREATEST(0, $3)) "
+            "ON CONFLICT (user_id, prayer_name) DO UPDATE SET remaining = GREATEST(0, qaza.remaining + $3)",
+            user_id, name, delta
+        )
+    balances = await get_qaza(db_pool, user_id)
+    await callback.message.edit_text(
+        f"<b>{name} \u2014 {balances.get(name, 0)} remaining</b>\n\n"
+        "\u2212 records make-ups, + adds to your count.",
+        reply_markup=generate_qaza_adjuster(name),
+    )
+    await callback.answer(f"{name}: {balances.get(name, 0)} remaining")
+
+
 @dp.message()
 async def fallback_handler(message: Message) -> None:
     await message.answer(
@@ -862,13 +1059,16 @@ async def fallback_handler(message: Message) -> None:
 async def set_bot_commands(bot: Bot) -> None:
     await bot.set_my_commands([
         BotCommand(command="start", description="Set location & reminders"),
-        BotCommand(command="log", description="Log prayers"),
-        BotCommand(command="schedule", description="Today's upcoming alerts"),
-        BotCommand(command="report", description="Daily / weekly / monthly reports"),
+        BotCommand(command="log_prayers", description="Log prayers"),
+        BotCommand(command="nafl", description="Log voluntary (nafl) prayers"),
+        BotCommand(command="qaza", description="Track missed-prayer make-ups"),
+        BotCommand(command="view_schedule", description="Today's upcoming alerts"),
+        BotCommand(command="reports", description="Daily / weekly / monthly reports"),
         BotCommand(command="overview", description="30-day activity grid"),
         BotCommand(command="profile", description="Your stats & streaks"),
         BotCommand(command="settings", description="Reminder time & Asr method"),
-        BotCommand(command="location", description="Update your location"),
+        BotCommand(command="change_location", description="Update your location"),
+        BotCommand(command="test", description="Send a test notification"),
         BotCommand(command="help", description="How the bot works"),
     ])
 
